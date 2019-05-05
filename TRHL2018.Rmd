@@ -1,0 +1,149 @@
+---
+title: "The 2018 TRHL auction"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(lubridate)
+
+start <- as_datetime("2019-02-06 22:00:00 UTC")  # auction start
+auction2018 <- read_xlsx("~/Documents/sports/TRHL/2018/TRHL auction 2018.xlsx", sheet = "bids") %>%
+      mutate(Time = mdy_hms(Time))
+sold2018 <- read_xlsx("~/Documents/sports/TRHL/2018/TRHL auction 2018.xlsx", sheet = "sold") %>%
+      mutate(sale_time = mdy_hms(sale_time)) %>%
+      select(sale_time, UID, sale_team, Salary)
+auction2018 <- auction2018 %>%
+      left_join(sold2018, by = "UID") %>%
+      group_by(UID) %>%
+      mutate(sale_dur = difftime(sale_time, min(Time), units = "hours")) %>%
+      filter(!is.na(sale_time))
+auction2018$Sold <- auction2018$New == auction2018$Salary
+auction2018$aucdays <- (as.integer(floor_date(auction2018$Time, unit = "day") - floor_date(start, unit = "day"))) / 86400 + 1
+auction2018 <- auction2018 %>%
+      mutate(mins = as.integer(difftime(Time, start, units = "mins")) %% 1440)
+```
+
+The 2018 TRHL auction began February 6, 2019 and ended on March 18.  This document offers some graphical views of the auction.
+  
+  
+#### Bidding patterns
+
+```{r bidhistory, echo = FALSE, fig.width = 12}
+auction2018 %>%
+      ggplot(aes(x = Time)) +
+      geom_histogram(bins = 960, color = "blue") +
+      labs(title = "Total bids in ten-minute intervals",
+           x = "Auction timeline",
+           y = "Number of bids")
+```
+  
+  
+The following graph shows the total number of bids that occurred between deadlines during the auction, divided into one-minute intervals.  
+  
+```{r bidday, echo = FALSE, fig.width = 12}
+auction2018 %>%
+      ggplot(aes(x = mins)) +
+      geom_histogram(bins = 1440, color = "blue") +
+      labs(title = "Total bids each auction day in one-minute intervals",
+           x = "Minutes after the previous deadline",
+           y = "Number of bids")
+```
+  
+  
+#### Bidding on individual players
+
+The lines show the bidding history for all players in the TRHL auction, with the winning bid indicated in green.  The point at which the player sold is shown by "$", with the size of the symbol proportional to the player's 2018 fWAR.  
+  
+```{r Bid history, echo = FALSE, fig.height = 10, fig.width = 12}
+g <- ggplot(arrange(auction2018, Time), aes(x = Time, y = New, group = UID)) +
+      geom_path(color = "gray") +
+      geom_point(inherit.aes = FALSE, data = filter(auction2018, Sold == TRUE), 
+                 aes(x = sale_time, y = Salary, size = fWAR), shape = "$", color = "springgreen4", alpha = 0.5) +
+      geom_point(inherit.aes = FALSE, data = auction2018,
+                 aes(x = Time, y = New), shape = 15, color = "red3", size = 1, alpha = 0.6) +
+      geom_point(inherit.aes = FALSE, data = filter(auction2018, Sold == TRUE),
+                 aes(x = Time, y = New), shape = 16, color = "springgreen4", size = 4, alpha = 0.8) +
+      labs(title = "Time course of TRHL auction", y = "Bid price") +
+      guides(size = "none")
+g
+```
+  
+  
+#### Bidding by team
+
+```{r echo = FALSE, fig.height = 10, fig.width = 12}
+g + facet_wrap(~ Team, ncol = 4)
+```
+
+```{r echo = FALSE}
+auction2018 %>%
+      filter(Sold == TRUE) %>%
+      ggplot(aes(x = fWAR, y = Salary)) +
+      geom_point(color = "blue", alpha = 0.5, shape = 1) +
+      labs(title = "FanGraphs WAR vs. TRHL sale price")
+```
+
+The player on the far left is Chris Davis, and the two on the far right are Max Scherzer and Francisco Lindor.  
+  
+  
+#### Auction inflation
+
+This graph shows the cumulative amount spent on sold players for each day of the auction in green, with an overlay in blue showing cumulative fWAR bought.  The fWAR total is multiplied by 12 for visualization purposes.  The red line shows the amount of available money at the beginning of the auction.  
+
+```{r cumulative, echo = FALSE}
+aucchart <- auction2018 %>%
+            filter(Sold == TRUE) %>%
+            group_by(aucdays) %>%
+            summarise(WAR = sum(fWAR), Spent = sum(Salary)) %>%
+            mutate(cumWAR = cumsum(WAR), cumspent = cumsum(Spent), perWAR = Spent / WAR)
+
+aucchart %>%
+      ggplot(aes(x = aucdays, y = cumspent)) +
+      geom_area(color = "seagreen2", fill = "seagreen2") +
+      geom_area(inherit.aes = FALSE, 
+                aes(x = aucdays, y = cumWAR * 12), color = "slateblue1", fill = "slateblue1") +
+      labs(title = "Cumulative money spent on sold players and fWAR bought",
+           x = "Day of auction", y = "Cumulative amount spent/fWAR x 12") +
+      geom_hline(aes(yintercept = 4246), color = "red3") +
+      annotate(geom = "text", label = "Spent", x = 35, y = 3500, color = "white") +
+      annotate(geom = "text", label = "fWAR x 12", x = 35, y = 2000, color = "white")
+```
+  
+  
+#### Players who took the longest to sell after the opening bid
+  
+```{r longsales, echo = FALSE, results = "asis"}
+tab1 <- auction2018 %>%
+      filter(Sold == TRUE) %>%
+      arrange(desc(sale_dur)) %>%
+      select(UID, Player, Team, sale_dur, Salary, fWAR) %>%
+      head(10)
+knitr::kable(tab1)
+```
+  
+  
+#### Players receiving the most bids
+  
+```{r echo = FALSE, results = "asis"}
+tab2 <- auction2018 %>%
+      group_by(Player) %>%
+      summarise(bids = n()) %>%
+      arrange(desc(bids)) %>%
+      head(10)
+knitr::kable(tab2)
+```
+  
+  
+#### Teams making the most bids
+
+```{r echo = FALSE, results = "asis"}
+tab3 <- auction2018 %>%
+      group_by(Team) %>%
+      summarise(bids = n()) %>%
+      arrange(desc(bids)) %>%
+      head(10)
+knitr::kable(tab3)
+```
